@@ -933,6 +933,11 @@ fn has_play_url(info: &Value) -> bool {
 
 #[tauri::command]
 pub async fn api_play(state: State<'_, Api>, id: i64, ep: u32) -> Result<Value, String> {
+    play_info(&state, id, ep).await
+}
+
+/// 取一集的播放地址；离线下载在签名过期时也用它重新获取。
+pub async fn play_info(state: &Api, id: i64, ep: u32) -> Result<Value, String> {
     // 优先走新接口；失败或没有可用地址时退回旧接口，两者都不行就返回新接口的结果/错误。
     let primary = state
         .post(
@@ -1023,6 +1028,45 @@ pub async fn api_follow(state: State<'_, Api>, uid: i64, on: bool, expected_user
     state
         .account_request(method, &format!("/api/users/{uid}/follow"), None, expected_user_id, expected_origin.as_deref())
         .await
+}
+
+/* ───────────────────────── 离线下载 ───────────────────────── */
+
+/// 下载一集到本地（已在下载则直接返回进度）。只支持 HLS 短剧剧集。
+#[tauri::command]
+pub async fn download_start(
+    app: tauri::AppHandle,
+    id: i64,
+    ep: u32,
+    title: Option<String>,
+    cover: Option<String>,
+) -> Result<crate::downloads::Item, String> {
+    if id <= 0 || ep == 0 {
+        return Err("无效的剧集".into());
+    }
+    crate::downloads::start(id, ep, title.unwrap_or_default(), cover.unwrap_or_default(), move || {
+        let app = app.clone();
+        async move {
+            use tauri::Manager;
+            let state = app.state::<Api>();
+            play_info(state.inner(), id, ep).await
+        }
+    })
+}
+
+#[tauri::command]
+pub fn download_list() -> Vec<crate::downloads::Item> {
+    crate::downloads::list()
+}
+
+#[tauri::command]
+pub fn download_pause(key: String) {
+    crate::downloads::pause(&key);
+}
+
+#[tauri::command]
+pub fn download_delete(key: String) -> Result<(), String> {
+    crate::downloads::delete(&key)
 }
 
 /* ───────────────────────── 本地缓存 ───────────────────────── */

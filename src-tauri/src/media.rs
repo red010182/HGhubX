@@ -95,7 +95,7 @@ fn strip_padding(mut buf: Vec<u8>) -> Vec<u8> {
     buf
 }
 
-fn image_kind(buf: &[u8]) -> Option<&'static str> {
+pub(crate) fn image_kind(buf: &[u8]) -> Option<&'static str> {
     if buf.len() < 12 {
         return None;
     }
@@ -177,7 +177,7 @@ fn dec(s: &str) -> String {
     percent_decode_str(s).decode_utf8_lossy().to_string()
 }
 
-fn absolutize(base: &str, target: &str) -> String {
+pub(crate) fn absolutize(base: &str, target: &str) -> String {
     if target.starts_with("http://") || target.starts_with("https://") {
         return target.to_string();
     }
@@ -190,7 +190,7 @@ fn absolutize(base: &str, target: &str) -> String {
 }
 
 /// 属性列表中的引号内可含逗号，不能直接 split(',')。
-fn hls_attributes(line: &str) -> Option<(&str, Vec<&str>)> {
+pub(crate) fn hls_attributes(line: &str) -> Option<(&str, Vec<&str>)> {
     let (tag, rest) = line.split_once(':')?;
     let mut attributes = Vec::new();
     let mut quoted = false;
@@ -208,7 +208,7 @@ fn hls_attributes(line: &str) -> Option<(&str, Vec<&str>)> {
     Some((tag, attributes))
 }
 
-fn map_uri_attributes(line: &str, mut rewrite: impl FnMut(&str) -> String) -> String {
+pub(crate) fn map_uri_attributes(line: &str, mut rewrite: impl FnMut(&str) -> String) -> String {
     let Some((tag, attributes)) = hls_attributes(line) else {
         return line.to_string();
     };
@@ -465,6 +465,14 @@ fn segment_response(
 /// `origin` 是本平台自定义协议的完整基址，见 [`LOCAL_ORIGIN`]；用于改写 m3u8 里的
 /// 分片与 key 地址。正常情况下调用方直接传 [`LOCAL_ORIGIN`]。
 pub async fn handle(path: &str, query: &str, origin: &str, range: Option<&str>) -> Response<Vec<u8>> {
+    // 离线下载：`/dl/<视频ID>_<集数>/<文件>`，只读本地目录，不出网。
+    if let Some(rest) = path.strip_prefix("/dl/") {
+        let response = match crate::downloads::read(rest) {
+            Some((ctype, bytes)) => respond(200, &ctype, bytes, "no-store"),
+            None => respond(404, "text/plain", b"not found".to_vec(), "no-store"),
+        };
+        return apply_byte_range(response, range);
+    }
     let target = query
         .split('&')
         .find_map(|kv| kv.strip_prefix("u="))

@@ -7,6 +7,7 @@ import LinePicker from "../components/LinePicker";
 import ProxySettings from "../components/ProxySettings";
 import ContentPreferencesSettings from "../components/ContentPreferencesSettings";
 import SettingsSection from "../components/SettingsSection";
+import { DownloadList } from "./Downloads";
 import { UsageAgreementText } from "../components/UsageAgreement";
 import { USAGE_AGREEMENT_VERSION } from "../usageAgreement";
 import { autoLineEnabled, setAutoLine } from "../autoLine";
@@ -16,12 +17,13 @@ import { copyText } from "../clipboard";
 import { Loader } from "../components/ios/effects";
 import { IBack, IBoltF, IBroom, IChevR, IHeart, IInfo, ILink, ILockF, IMoon, IRefresh, ISun, IVolMute } from "../icons";
 
-const SETTING_GROUPS = ["外观", "播放", "内容偏好", "本地数据", "网络", "播放诊断", "其他"] as const;
+const SETTING_GROUPS = ["外观", "播放", "内容偏好", "离线下载", "本地数据", "网络", "播放诊断", "其他"] as const;
 type SettingGroup = typeof SETTING_GROUPS[number];
 const GROUP_SUMMARIES: Record<SettingGroup, string> = {
   外观: "跟随系统、浅色与深色",
   播放: "启动静音与画质偏好",
   内容偏好: "标签屏蔽与内容显示",
+  离线下载: "已下载的剧集、进度与占用空间",
   本地数据: "收藏、观看记录与缓存",
   网络: "代理、线路与连接诊断",
   播放诊断: "详细日志与问题排查",
@@ -166,6 +168,8 @@ export default function Settings({ onBack, initialSection }: { onBack: () => voi
           </>)}
 
           {section("内容偏好", <ContentPreferencesSettings />)}
+
+          {section("离线下载", <DownloadList compact />)}
 
           {section("本地数据", <>
             <div className="flex items-center gap-3 px-3.5 py-3">

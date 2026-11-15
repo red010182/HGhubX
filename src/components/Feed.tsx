@@ -22,8 +22,9 @@ import { PreferenceStorageNotice } from "./PreferenceStorageNotice";
 import MobileHoldGuide from "./MobileHoldGuide";
 import { getHoldZone, HOLD_DELAY_MS, HOLD_LOCK_DISTANCE, type HoldZone } from "../mobileHold";
 import { useMobileHoldGuide } from "../useMobileHoldGuide";
+import { refreshDownloads, useDownloadItem } from "../downloadStore";
 import {
-  IBack, IBoltF, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IExpand, IFileText, IHeart, IHeartF, IMore,
+  IBack, IBoltF, ICheck, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IDownload, IExpand, IFileText, IHeart, IHeartF, IMore,
   ILink, IList, ILockF, IPauseF, IPlayF, ISearch, IStar, IStarF, IVertSwap, IVol, IVolMute,
 } from "../icons";
 
@@ -336,6 +337,27 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const shareLink = () => {
     const u = kind === "post" ? (posts[curId]?.video_url || meta.title) : `https://huangguoai.com/video/${curId}/`;
     copyText(u).then(() => toast("链接已复制", "ok")).catch(() => toast("复制失败", "info"));
+  };
+
+  /* 离线下载：当前集落盘，进度在「我的 → 离线下载」查看 */
+  const [downloadBusy, setDownloadBusy] = useState(false);
+  const download = useDownloadItem(curId, curEp);
+  const downloadPct = download?.total ? Math.floor((download.done / download.total) * 100) : 0;
+  const downloadLabel = !download ? "下载" : download.status === "done" ? "已下载"
+    : download.status === "downloading" ? `${downloadPct}%` : download.status === "paused" ? "继续" : "重试";
+  const startDownload = async () => {
+    if (downloadBusy || kind !== "video" || !curId) return;
+    if (download?.status === "done" || download?.status === "downloading") { store.push({ kind: "downloads" }); return; }
+    setDownloadBusy(true);
+    try {
+      const item = await api.downloadStart(curId, curEp, meta.title, meta.cover || undefined);
+      void refreshDownloads();
+      toast(item.status === "done" ? `第 ${curEp} 集已下载过` : `已开始下载第 ${curEp} 集`, "ok");
+    } catch (e) {
+      toast(typeof e === "string" ? e : "下载失败", "info");
+    } finally {
+      setDownloadBusy(false);
+    }
   };
 
   /* 倍速：中心小方块打开偏好，外侧右上 2.0x / 左下 0.5x。 */
@@ -1206,6 +1228,25 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 </div>
               )}
 
+              {/* 离线下载进度：当前这一集在下载时，画面顶部显示进度条（点一下进下载列表） */}
+              {isActive && kind === "video" && download && download.status !== "done" && (
+                <Button onClick={() => store.push({ kind: "downloads" })} aria-label={`下载进度 ${downloadPct}%`}
+                  className="feed-download-progress absolute left-1/2 -translate-x-1/2 z-30 w-[min(260px,70%)] rounded-full bg-black/60 backdrop-blur-sm px-3 py-1.5 pressable"
+                  style={{ top: "calc(var(--sat, 0px) + 58px)" }}>
+                  <span className="flex items-center gap-2 text-[11px] text-white/90 tabular-nums">
+                    <IDownload size={12} />
+                    <span className="flex-1 text-left truncate">
+                      {download.status === "downloading" ? (download.total ? `正在下载第 ${curEp} 集` : "正在准备下载…")
+                        : download.status === "paused" ? `下载已暂停` : `下载失败${download.error ? `：${download.error}` : ""}`}
+                    </span>
+                    <span>{downloadPct}%</span>
+                  </span>
+                  <span className="mt-1 block h-[3px] rounded-full bg-white/20 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={downloadPct}>
+                    <span className={`block h-full rounded-full transition-[width] duration-500 ${download.status === "failed" ? "bg-danger" : "bg-primary"}`} style={{ width: `${downloadPct}%` }} />
+                  </span>
+                </Button>
+              )}
+
               {/* 顶部 */}
               {!fs && !clean && mode === "context" ? (
                 isDesktop ? (
@@ -1319,6 +1360,12 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                     <IExpand size={26} className="hg-ink hg-ov-shadow" />
                     <span className="text-[12px] hg-ink-2 hg-ov-shadow">全屏</span>
                   </Button>
+                  {kind === "video" && (
+                    <Button onClick={() => void startDownload()} disabled={downloadBusy} aria-busy={downloadBusy} className="flex flex-col items-center gap-1 pressable" aria-label="下载">
+                      {download?.status === "done" ? <ICheck size={25} className="hg-ink hg-ov-shadow" /> : <IDownload size={25} className="hg-ink hg-ov-shadow" />}
+                      <span className="text-[12px] hg-ink-2 hg-ov-shadow tabular-nums">{downloadLabel}</span>
+                    </Button>
+                  )}
                   <Button onClick={shareLink} className="flex flex-col items-center gap-1 pressable" aria-label="分享">
                     <ILink size={25} className="hg-ink hg-ov-shadow" />
                     <span className="text-[12px] hg-ink-2 hg-ov-shadow">分享</span>
@@ -1361,6 +1408,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                     <Button onClick={() => setPanel("episodes")} aria-label="选集" className="flex flex-col items-center gap-1 pressable">
                       <IList size={26} className="text-white tsh" />
                       <span className="text-[12px] text-white/90">选集</span>
+                    </Button>
+
+                    <Button onClick={() => void startDownload()} disabled={downloadBusy} aria-busy={downloadBusy} aria-label="下载" title="下载本集，离线观看" className="flex flex-col items-center gap-1 pressable">
+                      {download?.status === "done" ? <ICheck size={25} className="text-white tsh" /> : <IDownload size={25} className="text-white tsh" />}
+                      <span className="text-[12px] text-white/90 tabular-nums">{downloadLabel}</span>
                     </Button>
                   </>
                 )}

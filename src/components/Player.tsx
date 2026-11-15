@@ -3,7 +3,7 @@ import { Loader } from "./ios/effects";
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Hls from "hls.js";
-import { fmtTime, platform, playlist } from "../api";
+import { fmtTime, isLocalMedia, platform, playlist } from "../api";
 import { mediaErrorMessage } from "../mediaErrors";
 import { mediaHost, mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 import { usePlaybackActivity } from "../usePlaybackActivity";
@@ -71,7 +71,8 @@ export default function Player({
     setWaiting(false);
     recoverCountRef.current = 0;
     const resume = proxyRecovery.resume();
-    const url = playlist(src);
+    // 离线剧集已是本地地址，不能再包一层 /hls 代理
+    const url = isLocalMedia(src) ? src : playlist(src);
     trace("source.load", { engine: Hls.isSupported() ? "hls.js" : "native", auto_play: autoPlay, resource: mediaResource(src), host: mediaHost(src) });
 
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
