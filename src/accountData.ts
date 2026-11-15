@@ -22,8 +22,10 @@ const validProgress = (value: unknown): value is WatchProgress => {
     && Number.isSafeInteger(row.ep) && row.ep > 0 && Number.isFinite(row.t) && row.t >= 0 && Number.isFinite(row.dur) && row.dur >= 0;
 };
 function sanitize(value: Partial<AccountData> | null | undefined): AccountData {
+  /* 只取账号数据字段：guest 初始值来自整个 Persist，若把 muted/volume 等设置也带进来，
+     之后每次 persist 都会把这些旧设置写回 store（例如播放中音量被反复重置为静音）。 */
   const data = { ...empty(), ...value };
-  return { ...data, likes: ids(data.likes), favs: ids(data.favs), follows: ids(data.follows), postLikes: ids(data.postLikes), postFavs: ids(data.postFavs),
+  return { likes: ids(data.likes), favs: ids(data.favs), follows: ids(data.follows), postLikes: ids(data.postLikes), postFavs: ids(data.postFavs),
     history: Array.isArray(data.history) ? data.history.filter(validProgress) : [], localHistory: ids(data.localHistory),
     likeEpisodes: Array.isArray(data.likeEpisodes) ? data.likeEpisodes.filter(row => Number.isSafeInteger(row?.video_id) && row.video_id > 0 && Number.isSafeInteger(row.ep) && row.ep > 0) : undefined,
     dirtyHistory: Object.fromEntries(Object.entries(data.dirtyHistory || {}).filter(([id, row]) => Number.isSafeInteger(Number(id)) && Number(id) > 0 && Number.isSafeInteger(row?.ep) && row.ep > 0 && Number.isFinite(row.at))),
