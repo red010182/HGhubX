@@ -7,28 +7,45 @@ import type { Comment, CommentPage, Episode } from "../types";
 import { useStore } from "../store";
 import { copyText } from "../clipboard";
 import { Avatar, Empty } from "./ui";
-import { IClose, IHeart, ISendF } from "../icons";
+import { ICheck, IClose, IDownload, IHeart, ISendF } from "../icons";
+import { useVideoDownloads } from "../downloadStore";
 
 /* ================= 选集 ================= */
-export function EpisodesPanel({ videoId, episodes, current, onPick, onClose, bare = false }: {
+export function EpisodesPanel({ videoId, episodes, current, onPick, onClose, bare = false, onDownloadAll, downloadAllBusy = false }: {
   videoId: number; episodes: Episode[]; current: number; onPick: (ep: number) => void; onClose: () => void;
+  /** 整季下载：所有集一次加入下载队列 */
+  onDownloadAll?: () => void;
+  downloadAllBusy?: boolean;
   /** 嵌在双栏抽屉里时，隐藏自带的标题栏与底注 */
   bare?: boolean;
 }) {
   const [asc, setAsc] = useState(true);
   const list = asc ? episodes : [...episodes].reverse();
+  const downloads = useVideoDownloads(videoId);
+  const downloadedCount = episodes.filter(e => downloads.get(e.ep_num)?.status === "done").length;
+  const allDone = episodes.length > 0 && downloadedCount === episodes.length;
+  const downloadAll = onDownloadAll && episodes.length > 0 && (
+    <Button onClick={onDownloadAll} disabled={downloadAllBusy || allDone} aria-busy={downloadAllBusy}
+      title={allDone ? "全部集数已下载" : "所有集加入下载队列，同时最多下载 2 集"}
+      className="flex items-center gap-1 text-[12px] text-primary disabled:text-mut pressable">
+      {allDone ? <ICheck size={13} /> : <IDownload size={13} />}
+      {allDone ? "已下载全集" : downloadedCount ? `下载全集（已下 ${downloadedCount}）` : "下载全集"}
+    </Button>
+  );
   return (
     <div className="flex flex-col h-full">
       {bare ? (
         <div className="shrink-0 flex items-center gap-2 px-4 pb-2">
           <span className="text-[12px] text-mut">共 {episodes.length} 集</span>
-          <Button onClick={() => setAsc((v) => !v)} className="ml-auto text-[12px] text-primary pressable">{asc ? "倒序" : "正序"}</Button>
+          <span className="ml-auto">{downloadAll}</span>
+          <Button onClick={() => setAsc((v) => !v)} className="text-[12px] text-primary pressable">{asc ? "倒序" : "正序"}</Button>
         </div>
       ) : (
         <div className="shrink-0 flex items-center gap-2 px-4 h-12">
           <span className="text-[14px] font-bold text-on">选集</span>
           <span className="text-[12px] text-mut">共 {episodes.length} 集</span>
-          <Button onClick={() => setAsc((v) => !v)} className="ml-auto text-[12px] text-primary pressable">{asc ? "倒序" : "正序"}</Button>
+          <span className="ml-auto">{downloadAll}</span>
+          <Button onClick={() => setAsc((v) => !v)} className="text-[12px] text-primary pressable">{asc ? "倒序" : "正序"}</Button>
           <Button onClick={onClose} aria-label="关闭" className="w-7 h-7 rounded-full bg-s3 flex items-center justify-center text-mut pressable">
             <IClose size={13} />
           </Button>
@@ -36,12 +53,19 @@ export function EpisodesPanel({ videoId, episodes, current, onPick, onClose, bar
       )}
       <div className="flex-1 scroll-y px-4 pb-4">
         <div className="grid grid-cols-4 gap-2">
-          {list.map((e) => (
-            <Button key={e.ep_num} aria-current={e.ep_num === current ? "true" : undefined} onClick={() => onPick(e.ep_num)}
-              className={`h-10 rounded-(--r-sm) text-[13px] font-semibold pressable ${e.ep_num === current ? "bg-primary text-on-primary" : "bg-s3 text-on/80"}`}>
-              {e.ep_num}
-            </Button>
-          ))}
+          {list.map((e) => {
+            const dl = downloads.get(e.ep_num)?.status;
+            const mark = dl === "done" ? "已下载" : dl === "downloading" ? "下载中" : dl === "queued" ? "排队中" : "";
+            return (
+              <Button key={e.ep_num} aria-current={e.ep_num === current ? "true" : undefined} onClick={() => onPick(e.ep_num)}
+                aria-label={mark ? `第 ${e.ep_num} 集，${mark}` : undefined}
+                className={`relative h-10 rounded-(--r-sm) text-[13px] font-semibold pressable ${e.ep_num === current ? "bg-primary text-on-primary" : "bg-s3 text-on/80"}`}>
+                {e.ep_num}
+                {dl === "done" && <ICheck size={10} aria-hidden="true" className="absolute right-1 top-1 opacity-80" />}
+                {(dl === "downloading" || dl === "queued") && <IDownload size={10} aria-hidden="true" className="absolute right-1 top-1 opacity-60" />}
+              </Button>
+            );
+          })}
         </div>
         {!episodes.length && <div className="text-center text-[12px] text-dim py-8">暂无剧集</div>}
       </div>

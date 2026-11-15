@@ -210,6 +210,9 @@ export const api = {
   /* 离线下载：只下 HLS 短剧剧集，文件落在应用数据目录 */
   downloadStart: (id: number, ep: number, title?: string, cover?: string) =>
     invoke<DownloadItem>("download_start", { id, ep, title: title ?? null, cover: cover ?? null }),
+  /** 整季下载：多集一次入队（同时最多下 2 集），返回新入队的集数 */
+  downloadSeason: (id: number, eps: number[], title?: string, cover?: string) =>
+    invoke<number>("download_season", { id, eps, title: title ?? null, cover: cover ?? null }),
   downloadList: () => invoke<DownloadItem[]>("download_list"),
   downloadPause: (key: string) => invoke<void>("download_pause", { key }),
   downloadDelete: (key: string) => invoke<void>("download_delete", { key }),
@@ -221,7 +224,7 @@ export const api = {
 
 /* ── 离线下载 ───────────────────────────────────────────── */
 
-export type DownloadStatus = "downloading" | "paused" | "failed" | "done";
+export type DownloadStatus = "queued" | "downloading" | "paused" | "failed" | "done";
 export type DownloadItem = {
   key: string;
   video_id: number;

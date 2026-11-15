@@ -344,10 +344,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const download = useDownloadItem(curId, curEp);
   const downloadPct = download?.total ? Math.floor((download.done / download.total) * 100) : 0;
   const downloadLabel = !download ? "下载" : download.status === "done" ? "已下载"
-    : download.status === "downloading" ? `${downloadPct}%` : download.status === "paused" ? "继续" : "重试";
+    : download.status === "downloading" ? `${downloadPct}%` : download.status === "queued" ? "排队"
+    : download.status === "paused" ? "继续" : "重试";
   const startDownload = async () => {
     if (downloadBusy || kind !== "video" || !curId) return;
-    if (download?.status === "done" || download?.status === "downloading") { store.push({ kind: "downloads" }); return; }
+    if (download && download.status !== "paused" && download.status !== "failed") { store.push({ kind: "downloads" }); return; }
     setDownloadBusy(true);
     try {
       const item = await api.downloadStart(curId, curEp, meta.title, meta.cover || undefined);
@@ -357,6 +358,22 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       toast(typeof e === "string" ? e : "下载失败", "info");
     } finally {
       setDownloadBusy(false);
+    }
+  };
+
+  /* 整季下载：本部剧所有集一次入队（后端同时最多下 2 集） */
+  const [seasonBusy, setSeasonBusy] = useState(false);
+  const downloadSeason = async () => {
+    if (seasonBusy || kind !== "video" || !curId || !episodes.length) return;
+    setSeasonBusy(true);
+    try {
+      const added = await api.downloadSeason(curId, episodes.map(e => e.ep_num), meta.title, meta.cover || undefined);
+      void refreshDownloads();
+      toast(added ? `已把 ${added} 集加入下载队列` : "全部集数都已在下载或已下载", "ok");
+    } catch (e) {
+      toast(typeof e === "string" ? e : "整季下载失败", "info");
+    } finally {
+      setSeasonBusy(false);
     }
   };
 
@@ -1236,7 +1253,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   <span className="flex items-center gap-2 text-[11px] text-white/90 tabular-nums">
                     <IDownload size={12} />
                     <span className="flex-1 text-left truncate">
-                      {download.status === "downloading" ? (download.total ? `正在下载第 ${curEp} 集` : "正在准备下载…")
+                      {download.status === "queued" ? `第 ${curEp} 集排队等待下载`
+                        : download.status === "downloading" ? (download.total ? `正在下载第 ${curEp} 集` : "正在准备下载…")
                         : download.status === "paused" ? `下载已暂停` : `下载失败${download.error ? `：${download.error}` : ""}`}
                     </span>
                     <span>{downloadPct}%</span>
@@ -1660,7 +1678,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         <div className={`desktop-dock-panel ${panel ? "is-open" : ""}`}>
           <div className="desktop-dock-inner">
             {panel === "detail" ? detailBody(() => setPanel(null)) : panel === "episodes" ? (
-              <EpisodesPanel videoId={curId} episodes={episodes} current={curEp} onPick={pickEp} onClose={() => setPanel(null)} />
+              <EpisodesPanel videoId={curId} episodes={episodes} current={curEp} onPick={pickEp} onClose={() => setPanel(null)} onDownloadAll={() => void downloadSeason()} downloadAllBusy={seasonBusy} />
             ) : panel === "comments" ? (
               <CommentsPanel videoId={curId} ep={curEp} total={meta.comment} kind={kind} onClose={() => setPanel(null)} />
             ) : null}
@@ -1699,7 +1717,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
               <div className="flex-1 min-h-0">
                 {panel === "episodes" ? (
-                  <EpisodesPanel bare videoId={curId} episodes={episodes} current={curEp} onPick={pickEp} onClose={() => setPanel(null)} />
+                  <EpisodesPanel bare videoId={curId} episodes={episodes} current={curEp} onPick={pickEp} onClose={() => setPanel(null)} onDownloadAll={() => void downloadSeason()} downloadAllBusy={seasonBusy} />
                 ) : (
                   detailBody()
                 )}

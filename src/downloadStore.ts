@@ -15,7 +15,7 @@ const emit = () => listeners.forEach(fn => fn());
 
 function schedule() {
   if (timer !== undefined || !listeners.size) return;
-  if (!state.items.some(i => i.status === "downloading")) return;
+  if (!state.items.some(i => i.status === "downloading" || i.status === "queued")) return;
   timer = window.setTimeout(() => { timer = undefined; void refreshDownloads(); }, 1000);
 }
 
@@ -40,6 +40,14 @@ function subscribe(fn: () => void) {
 
 export function useDownloads(): State {
   return useSyncExternalStore(subscribe, () => state);
+}
+
+/** 一部剧已有下载记录的各集，按集数索引。 */
+export function useVideoDownloads(videoId: number): Map<number, DownloadItem> {
+  const { items } = useDownloads();
+  const map = new Map<number, DownloadItem>();
+  for (const item of items) if (item.video_id === videoId) map.set(item.ep, item);
+  return map;
 }
 
 /** 某一集的下载状态（没下载过返回 undefined）。 */

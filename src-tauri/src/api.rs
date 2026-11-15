@@ -1032,26 +1032,26 @@ pub async fn api_follow(state: State<'_, Api>, uid: i64, on: bool, expected_user
 
 /* ───────────────────────── 离线下载 ───────────────────────── */
 
-/// 下载一集到本地（已在下载则直接返回进度）。只支持 HLS 短剧剧集。
+/// 下载一集到本地：进入下载队列（同时最多下 2 集）。只支持 HLS 短剧剧集。
 #[tauri::command]
-pub async fn download_start(
-    app: tauri::AppHandle,
+pub fn download_start(
     id: i64,
     ep: u32,
     title: Option<String>,
     cover: Option<String>,
 ) -> Result<crate::downloads::Item, String> {
-    if id <= 0 || ep == 0 {
-        return Err("无效的剧集".into());
-    }
-    crate::downloads::start(id, ep, title.unwrap_or_default(), cover.unwrap_or_default(), move || {
-        let app = app.clone();
-        async move {
-            use tauri::Manager;
-            let state = app.state::<Api>();
-            play_info(state.inner(), id, ep).await
-        }
-    })
+    crate::downloads::enqueue(id, ep, title.unwrap_or_default(), cover.unwrap_or_default())
+}
+
+/// 整季下载：把多集一次排进队列，返回新入队的集数。
+#[tauri::command]
+pub fn download_season(
+    id: i64,
+    eps: Vec<u32>,
+    title: Option<String>,
+    cover: Option<String>,
+) -> Result<usize, String> {
+    crate::downloads::enqueue_many(id, &eps, title.unwrap_or_default(), cover.unwrap_or_default())
 }
 
 #[tauri::command]

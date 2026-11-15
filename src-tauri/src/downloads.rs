@@ -16,10 +16,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// 单集内并发的分片请求数
 const CONCURRENCY: usize = 4;
+/// 同时在下载的集数；整季入队时其余排队，避免几十集同时开连接
+pub const MAX_ACTIVE: usize = 2;
+/// 一次整季入队的上限
+pub const MAX_BATCH: usize = 500;
 const MAX_REFRESH: u32 = 3;
 const MANIFEST: &str = "downloads.json";
 const CANCELLED: &str = "已暂停";
@@ -27,6 +34,8 @@ const CANCELLED: &str = "已暂停";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
+    /// 在队列里等空位（同时最多 [`MAX_ACTIVE`] 集在下载）
+    Queued,
     Downloading,
     Paused,
     Failed,
@@ -54,11 +63,24 @@ pub struct Item {
     pub error: Option<String>,
     #[serde(default)]
     pub created_at: u64,
+    /// 入队序号：队列按它先进先出
+    #[serde(default)]
+    pub queued_at: u64,
 }
 
 static ROOT: OnceCell<PathBuf> = OnceCell::new();
 static ITEMS: Lazy<Mutex<Vec<Item>>> = Lazy::new(|| Mutex::new(Vec::new()));
 static TASKS: Lazy<Mutex<HashMap<String, Arc<AtomicBool>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static PUMP: Mutex<()> = Mutex::new(());
+static SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// 取一集播放地址（签名过期后会被再次调用）。由 lib.rs 启动时注入，避免本模块依赖 Tauri 状态。
+pub type Resolver = Arc<dyn Fn(i64, u32) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send>> + Send + Sync>;
+static RESOLVER: OnceCell<Resolver> = OnceCell::new();
+
+pub fn set_resolver(resolver: Resolver) {
+    let _ = RESOLVER.set(resolver);
+}
 
 fn now() -> u64 {
     std::time::SystemTime::now()
@@ -109,7 +131,8 @@ pub fn bind(app_data: &Path) {
         .unwrap_or_default();
     items.retain(|i| valid_key(&i.key));
     for item in items.iter_mut() {
-        if item.status == Status::Downloading {
+        // 上次退出时没下完的（含排队中）一律暂停，由用户决定继续，移动端尤其不该自己开跑。
+        if matches!(item.status, Status::Downloading | Status::Queued) {
             item.status = Status::Paused;
         }
         if item.status == Status::Done && !dir.join(&item.key).join("index.m3u8").is_file() {
@@ -117,6 +140,7 @@ pub fn bind(app_data: &Path) {
             item.error = Some("本地文件已丢失，请重新下载".into());
         }
     }
+    SEQ.store(items.iter().map(|i| i.queued_at).max().unwrap_or(0) + 1, Ordering::Release);
     *ITEMS.lock().unwrap() = items;
     let _ = ROOT.set(dir);
 }
@@ -533,75 +557,128 @@ where
     }
 }
 
-/// 新建或继续下载。已在下载中则直接返回当前条目。
-pub fn start<F, Fut>(id: i64, ep: u32, title: String, cover_url: String, resolve: F) -> Result<Item, String>
-where
-    F: Fn() -> Fut + Send + 'static,
-    Fut: std::future::Future<Output = Result<Value, String>> + Send,
-{
-    root()?;
+/// 把一集放进队列（新建、继续、重试都走这里）；已完成或正在下载的保持不变。
+fn enqueue_locked(items: &mut Vec<Item>, cancelling: bool, id: i64, ep: u32, title: &str, cover_url: &str) -> Item {
     let key = task_key(id, ep);
-    let cancel = {
-        let mut tasks = TASKS.lock().unwrap();
-        if let Some(running) = tasks.get(&key) {
-            if running.load(Ordering::Acquire) {
-                return Err("上一个任务正在停止，请稍后再试".into());
-            }
-            return ITEMS.lock().unwrap().iter().find(|i| i.key == key).cloned().ok_or("下载任务不存在".into());
-        }
-        let cancel = Arc::new(AtomicBool::new(false));
-        tasks.insert(key.clone(), cancel.clone());
-        cancel
-    };
-    let item = {
+    if !items.iter().any(|i| i.key == key) {
+        items.push(Item {
+            key: key.clone(), video_id: id, ep, title: title.to_string(), cover_url: cover_url.to_string(),
+            has_cover: false, status: Status::Paused, done: 0, total: 0, bytes: 0, error: None,
+            created_at: now(), queued_at: 0,
+        });
+    }
+    let item = items.iter_mut().find(|i| i.key == key).unwrap();
+    if !title.is_empty() {
+        item.title = title.to_string();
+    }
+    if !cover_url.is_empty() {
+        item.cover_url = cover_url.to_string();
+    }
+    // 正在停止（刚点了暂停）的任务也允许重新入队：它结束时看到 Queued 不会改回暂停。
+    let idle = matches!(item.status, Status::Paused | Status::Failed) || (item.status == Status::Downloading && cancelling);
+    if idle {
+        item.status = Status::Queued;
+        item.error = None;
+        item.queued_at = SEQ.fetch_add(1, Ordering::AcqRel);
+    }
+    item.clone()
+}
+
+fn cancelling(key: &str) -> bool {
+    TASKS.lock().unwrap().get(key).is_some_and(|c| c.load(Ordering::Acquire))
+}
+
+/// 下载一集：入队后按空位开始。
+pub fn enqueue(id: i64, ep: u32, title: String, cover_url: String) -> Result<Item, String> {
+    enqueue_many(id, &[ep], title, cover_url)?;
+    let key = task_key(id, ep);
+    ITEMS.lock().unwrap().iter().find(|i| i.key == key).cloned().ok_or_else(|| "下载任务不存在".into())
+}
+
+/// 整季入队：按集数顺序排队，返回本次新排进队列的集数（已完成/在下载的不算）。
+pub fn enqueue_many(id: i64, eps: &[u32], title: String, cover_url: String) -> Result<usize, String> {
+    root()?;
+    if id <= 0 || eps.is_empty() || eps.len() > MAX_BATCH || eps.contains(&0) {
+        return Err("无效的剧集".into());
+    }
+    let mut eps = eps.to_vec();
+    eps.sort_unstable();
+    eps.dedup();
+    let stopping: Vec<bool> = eps.iter().map(|ep| cancelling(&task_key(id, *ep))).collect();
+    let mut added = 0;
+    {
         let mut items = ITEMS.lock().unwrap();
-        if !items.iter().any(|i| i.key == key) {
-            items.push(Item {
-                key: key.clone(), video_id: id, ep, title: title.clone(), cover_url: cover_url.clone(),
-                has_cover: false, status: Status::Paused, done: 0, total: 0, bytes: 0, error: None, created_at: now(),
-            });
-        }
-        let item = items.iter_mut().find(|i| i.key == key).unwrap();
-        if item.status != Status::Done {
-            item.status = Status::Downloading;
-            item.error = None;
-            if !title.is_empty() {
-                item.title = title;
-            }
-            if !cover_url.is_empty() {
-                item.cover_url = cover_url;
+        for (ep, stopping) in eps.iter().zip(stopping) {
+            let before = items.iter().find(|i| i.key == task_key(id, *ep)).map(|i| i.status.clone());
+            let item = enqueue_locked(&mut items, stopping, id, *ep, &title, &cover_url);
+            if item.status == Status::Queued && before != Some(Status::Queued) {
+                added += 1;
             }
         }
-        item.clone()
-    };
-    if item.status == Status::Done {
-        TASKS.lock().unwrap().remove(&key);
-        return Ok(item);
     }
     save();
-    let cover = item.cover_url.clone();
-    tauri::async_runtime::spawn(async move {
-        let result = run(&key, cover, cancel, resolve).await;
-        TASKS.lock().unwrap().remove(&key);
-        update(&key, true, |item| match result {
-            Ok(()) => {
-                item.status = Status::Done;
-                item.error = None;
-            }
-            Err(e) if e == CANCELLED => item.status = Status::Paused,
-            Err(e) => {
-                item.status = Status::Failed;
-                item.error = Some(e);
-            }
-        });
+    pump();
+    Ok(added)
+}
+
+/// 有空位就从队列头取下一集开始下载。任务结束、入队、暂停后都会调用。
+pub fn pump() {
+    let Some(resolver) = RESOLVER.get().cloned() else { return };
+    let _guard = PUMP.lock().unwrap();
+    loop {
+        let mut tasks = TASKS.lock().unwrap();
+        if tasks.len() >= MAX_ACTIVE {
+            return;
+        }
+        let next = {
+            let mut items = ITEMS.lock().unwrap();
+            let Some(item) = items
+                .iter_mut()
+                .filter(|i| i.status == Status::Queued && !tasks.contains_key(&i.key))
+                .min_by_key(|i| i.queued_at)
+            else {
+                return;
+            };
+            item.status = Status::Downloading;
+            item.clone()
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        tasks.insert(next.key.clone(), cancel.clone());
+        drop(tasks);
+        save();
+        tauri::async_runtime::spawn(run_task(next, cancel, resolver.clone()));
+    }
+}
+
+async fn run_task(item: Item, cancel: Arc<AtomicBool>, resolver: Resolver) {
+    let (id, ep, key) = (item.video_id, item.ep, item.key.clone());
+    let result = run(&key, item.cover_url.clone(), cancel, || resolver(id, ep)).await;
+    TASKS.lock().unwrap().remove(&key);
+    update(&key, true, |item| match result {
+        Ok(()) => {
+            item.status = Status::Done;
+            item.error = None;
+        }
+        // 停止期间被重新入队：保持排队，下面 pump 会再开始
+        Err(_) if item.status == Status::Queued => {}
+        Err(e) if e == CANCELLED => item.status = Status::Paused,
+        Err(e) => {
+            item.status = Status::Failed;
+            item.error = Some(e);
+        }
     });
-    Ok(item)
+    pump();
 }
 
 pub fn pause(key: &str) {
     if let Some(cancel) = TASKS.lock().unwrap().get(key) {
         cancel.store(true, Ordering::Release);
     }
+    update(key, true, |item| {
+        if item.status == Status::Queued {
+            item.status = Status::Paused;
+        }
+    });
 }
 
 pub fn delete(key: &str) -> Result<(), String> {
@@ -720,6 +797,56 @@ mod tests {
         let variant = pick_variant("https://cdn.example/m.m3u8", master).unwrap();
         assert_eq!(variant.audio, None);
         assert!(!build_master(&variant).contains("AUDIO="), "dangling group reference removed");
+    }
+
+    /// 队列：同时最多 MAX_ACTIVE 集，按集数先进先出；排队中可暂停；失败后继续往下走。
+    #[tokio::test]
+    async fn season_queue_runs_at_most_two_episodes_in_order() {
+        let app_data = std::env::temp_dir().join(format!("hghubx-queue-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&app_data);
+        bind(&app_data);
+        set_resolver(Arc::new(|_, _| Box::pin(async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            Err::<Value, String>("测试：无地址".into())
+        })));
+        let id = 900_001;
+        let status = |ep: u32| ITEMS.lock().unwrap().iter().find(|i| i.key == task_key(id, ep)).map(|i| i.status.clone());
+
+        assert_eq!(enqueue_many(id, &[5, 3, 1, 2, 4, 3], "测试剧".into(), String::new()).unwrap(), 5);
+        assert_eq!(status(1), Some(Status::Downloading));
+        assert_eq!(status(2), Some(Status::Downloading));
+        for ep in 3..=5 {
+            assert_eq!(status(ep), Some(Status::Queued), "ep {ep}");
+        }
+        assert!(enqueue_many(id, &[0], String::new(), String::new()).is_err());
+        // 已在队列/下载中的不重复计数
+        assert_eq!(enqueue_many(id, &[1, 3], String::new(), String::new()).unwrap(), 0);
+
+        pause(&task_key(id, 4));
+        assert_eq!(status(4), Some(Status::Paused));
+
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if [1, 2, 3, 5].iter().all(|ep| status(*ep) == Some(Status::Failed)) {
+                break;
+            }
+        }
+        for ep in [1, 2, 3, 5] {
+            assert_eq!(status(ep), Some(Status::Failed), "ep {ep} drained");
+        }
+        assert_eq!(status(4), Some(Status::Paused), "paused episode stays out of the queue");
+        assert!(TASKS.lock().unwrap().keys().all(|k| !k.starts_with("900001_")));
+
+        // 失败的可整季重试
+        assert_eq!(enqueue_many(id, &[1, 2, 3, 4, 5], String::new(), String::new()).unwrap(), 5);
+        for ep in 1..=5 {
+            pause(&task_key(id, ep));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        for ep in 1..=5 {
+            delete(&task_key(id, ep)).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&app_data);
     }
 
     #[test]
