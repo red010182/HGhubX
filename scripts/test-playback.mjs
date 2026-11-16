@@ -146,6 +146,8 @@ async function speedMenuKeyboardChecks(page, paused) {
   await assertSelection(1);
 }
 async function gestureChecks(page) {
+  // 首次长按引导会盖住画面并暂停播放，手势用例不测它。
+  await page.addInitScript(() => localStorage.setItem("hghubx_mobile_hold_guide_v1", "1"));
   await loadPlayer(page);
   const video = page.locator('video');
   const tap = () => page.evaluate(() => {
@@ -169,6 +171,78 @@ async function gestureChecks(page) {
   await tap(); await tap();
   await page.waitForFunction(paused => document.querySelector('video').paused !== paused, wasPaused);
   assert.equal(await clean(), 'false', 'Double tap restores chrome and toggles playback once');
+
+  // 竖屏：控制 UI 显示时，画面正中有可点的播放 / 暂停键；净屏后隐藏。
+  const centerToggle = page.getByTestId('center-play-toggle');
+  await page.setViewportSize({ width: 390, height: 844 });
+  if (await video.evaluate(v => v.paused)) await video.evaluate(v => v.play());
+  await page.waitForFunction(() => document.querySelector('video')?.paused === false);
+  await centerToggle.waitFor();
+  assert.equal(await centerToggle.getAttribute('aria-label'), '暂停');
+  const box = await centerToggle.boundingBox();
+  const root = await page.locator('.player-root').boundingBox();
+  assert(Math.abs(box.x + box.width / 2 - (root.x + root.width / 2)) < 2, 'Center toggle is horizontally centered');
+  await centerToggle.click();
+  await page.waitForFunction(() => document.querySelector('video')?.paused === true);
+  await page.locator('[data-testid="center-play-toggle"][aria-label="播放"]').waitFor();
+  assert.equal(await clean(), 'false', 'Center toggle must not trigger the clean-screen tap');
+  await centerToggle.click();
+  await page.waitForFunction(() => document.querySelector('video')?.paused === false);
+
+  // 竖屏：标题上方贴左的快进在上、后退在下，各跳 10 秒。
+  const fwd = page.getByTestId('skip-forward'), back = page.getByTestId('skip-back');
+  const [fwdBox, backBox, title] = await Promise.all([fwd.boundingBox(), back.boundingBox(), page.getByText('Seek fixture').boundingBox()]);
+  assert(fwdBox.y < backBox.y && backBox.y + backBox.height <= title.y, 'Forward above back, both above the title');
+  assert(Math.abs(fwdBox.x - title.x) < 2 && Math.abs(backBox.x - title.x) < 2, 'Skip buttons share the title\'s left padding');
+  const now = () => video.evaluate(v => v.currentTime);
+  let before = await now();
+  await fwd.click();
+  await page.waitForFunction(t => document.querySelector('video').currentTime >= t + 9, before);
+  before = await now();
+  await back.click();
+  await page.waitForFunction(t => document.querySelector('video').currentTime <= t - 9, before);
+  await page.waitForTimeout(250);
+  await tap();
+  await page.waitForFunction(() => document.querySelector('.player-root')?.dataset.clean === 'true');
+  await centerToggle.waitFor({ state: 'detached' });
+
+  // 横屏（转横自动进入全屏）：单击唤出的 UI 要保持住，不能一闪即逝；中心键同样可用。
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.waitForFunction(() => document.querySelector('.player-root')?.matches('.fs-immersive, .fs-landscape'));
+  const exitFs = page.getByRole('button', { name: '退出全屏', exact: true });
+  await exitFs.waitFor({ state: 'detached', timeout: 6000 });
+  await page.waitForTimeout(250);
+  await tap();
+  await exitFs.waitFor();
+  await page.waitForTimeout(600);
+  assert(await exitFs.isVisible(), 'Landscape tap keeps the chrome visible');
+
+  // 横屏左下角：后退在左、快进在右且宽一倍，不再有播放 / 暂停键。
+  const fsBack = page.getByTestId('fs-skip-back'), fsFwd = page.getByTestId('fs-skip-forward');
+  const [bBox, fBox] = await Promise.all([fsBack.boundingBox(), fsFwd.boundingBox()]);
+  assert(Math.abs(fBox.x - (bBox.x + bBox.width) - 22) < 1, `Forward keeps 22px from back: ${fBox.x - (bBox.x + bBox.width)}`);
+  assert(Math.abs(fBox.width - 2 * bBox.width) < 1, `Forward is twice as wide: ${bBox.width} / ${fBox.width}`);
+  assert.equal(await page.locator('[data-testid="fs-skip-back"] ~ button svg rect').count(), 0, 'No play/pause button in the landscape bar');
+  let t0 = await video.evaluate(v => v.currentTime);
+  await fsFwd.click();
+  await page.waitForFunction(t => document.querySelector('video').currentTime >= t + 9, t0);
+  t0 = await video.evaluate(v => v.currentTime);
+  await fsBack.click();
+  await page.waitForFunction(t => document.querySelector('video').currentTime <= t - 9, t0);
+  assert.equal(await centerToggle.getAttribute('aria-label'), '暂停');
+  await centerToggle.click();
+  await page.locator('[data-testid="center-play-toggle"][aria-label="播放"]').waitFor();
+  assert.equal(await video.evaluate(v => v.paused), true);
+  await centerToggle.click();
+  await page.waitForFunction(() => document.querySelector('video')?.paused === false);
+  await page.waitForTimeout(250);
+  await tap();
+  await exitFs.waitFor({ state: 'detached' });
+  await centerToggle.waitFor({ state: 'detached' });
+  await page.waitForTimeout(250);
+  await tap();
+  await exitFs.waitFor();
+  await exitFs.waitFor({ state: 'detached', timeout: 6000 });
   return {singleTapMs};
 }
 

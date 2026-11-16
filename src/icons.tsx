@@ -128,3 +128,6 @@ export const IGlobe = S(
     <path d="M12 3.2c2.6 2.4 4 5.5 4 8.8s-1.4 6.4-4 8.8c-2.6-2.4-4-5.5-4-8.8s1.4-6.4 4-8.8Z" />
   </>,
 );
+const skipLabel = <text x="12" y="15.4" textAnchor="middle" fontSize="8.2" fontWeight="700" fill="currentColor" stroke="none">10</text>;
+export const IBack10 = S(<><path d="M12 3.5a8.5 8.5 0 1 1-8.5 8.5" /><path d="M14.4 1.4 12 3.5l2.4 2.1" />{skipLabel}</>);
+export const IFwd10 = S(<><path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5" /><path d="M9.6 1.4 12 3.5 9.6 5.6" />{skipLabel}</>);

@@ -25,7 +25,7 @@ import { useMobileHoldGuide } from "../useMobileHoldGuide";
 import { refreshDownloads, useDownloadItem } from "../downloadStore";
 import {
   IBack, IBoltF, ICheck, IChevR, IChevronDown, IChevronUp, IClose, ICommentF, ICompress, IDownload, IExpand, IFileText, IHeart, IHeartF, IMore,
-  ILink, IList, ILockF, IPauseF, IPlayF, ISearch, IStar, IStarF, IVertSwap, IVol, IVolMute,
+  ILink, IList, ILockF, IPauseF, IPlayF, ISearch, IStar, IStarF, IVertSwap, IVol, IVolMute, IBack10, IFwd10,
 } from "../icons";
 
 type Props = {
@@ -172,6 +172,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   useEffect(() => {
     if (paused) { setIdle(false); window.clearTimeout(idleTimer.current); }
   }, [paused]);
+  /* 移动端全屏：显示控制 UI 时重新计时自动隐藏，隐藏时取消计时 */
+  const setFsChrome = useCallback((show: boolean) => {
+    if (show) wake();
+    else { window.clearTimeout(idleTimer.current); setIdle(true); }
+  }, [wake]);
   const [fullscreen, setFullscreen] = useState(false);
   const [heartBurst, setHeartBurst] = useState(0);
   /* —— 移动端手势 —— */
@@ -198,6 +203,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const [vpLandscape, setVpLandscape] = useState(
     () => typeof window !== "undefined" && window.innerWidth > window.innerHeight,
   );
+  const vpLandRef = useRef(vpLandscape);
   /* 进出全屏过渡期多次续播，防止 iOS 把播放打断 */
   const keepAliveTimers = useRef<number[]>([]);
   /* 双指缩放：scale 1~4，平移跟手指 */
@@ -381,6 +387,15 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const effRate = holdSpeed || speedLock ? 2 : holdSlow ? 0.5 : rate;
   /* 沉浸全屏 + 横屏视频 → 舞台旋转 90°，看起来就是横屏 */
   const rotated = !isDesktop && fs && vsize.w > vsize.h && vsize.h > 0 && !vpLandscape;
+  /* 移动端（竖屏 / 横屏）：控制 UI 可见（普通模式非净屏 / 全屏非闲置）时，画面正中显示可点的播放 / 暂停键 */
+  const centerToggle = !isDesktop && !controlsLocked && (fs ? !idle : !clean);
+  /* 相对跳转（竖屏快进 / 快退按钮），夹在 [0, 时长) 内 */
+  const skipBy = (delta: number) => {
+    const v = videoRef.current?.el();
+    if (!v) return;
+    const end = Number.isFinite(v.duration) && v.duration > 0 ? v.duration - 0.25 : Infinity;
+    videoRef.current?.seek(Math.max(0, Math.min(end, v.currentTime + delta)), "mobile_skip");
+  };
   const landscapeVideo = vsize.w > 0 && vsize.h > 0 && vsize.w > vsize.h;
   /* 竖屏快捷胶囊的显隐：不卸载、只改 opacity，这样淡入淡出都能过渡（#19） */
   const capsuleOn = !fs && !clean && !isDesktop && (landscapeVideo || zoom.s > 1.05);
@@ -858,13 +873,13 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         window.clearTimeout(lastTapRef.current.timer);
         lastTapRef.current.timer = null;
         setClean(lastTapRef.current.clean ?? false);
-        if (!isDesktop && fs) setIdle(lastTapRef.current.idle ?? false);
+        if (!isDesktop && fs) setFsChrome(!(lastTapRef.current.idle ?? false));
         videoRef.current?.toggle();
       } else {
         lastTapRef.current.clean = clean;
         lastTapRef.current.idle = idle;
         setClean(!clean);
-        if (!isDesktop && fs) setIdle(!idle);
+        if (!isDesktop && fs) setFsChrome(idle);
         lastTapRef.current.timer = window.setTimeout(() => {
           lastTapRef.current.timer = null;
         }, 230) as unknown as number;
@@ -922,7 +937,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     wake();
     keepAlive();
     if (!isDesktop) {
-      try { void invoke("set_orientation", { landscape }); } catch { /* ignore */ }
+      try { invoke("set_orientation", { landscape }).catch(() => {}); } catch { /* ignore */ }
       if (landscape) {
         try {
           (screen.orientation as unknown as { lock?: (o: string) => Promise<void> })?.lock?.("landscape")?.catch(() => {});
@@ -936,7 +951,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     setFs(false);
     keepAlive();
     if (!isDesktop) {
-      try { void invoke("set_orientation", { landscape: false }); } catch { /* ignore */ }
+      try { invoke("set_orientation", { landscape: false }).catch(() => {}); } catch { /* ignore */ }
       try { screen.orientation?.unlock?.(); } catch { /* ignore */ }
     }
   }, [isDesktop, keepAlive, setClean, setFs]);
@@ -944,7 +959,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   /* 若用户在视频首帧宽高解析出来前已点进全屏，解析出横屏后自动补发横屏方向请求 */
   useEffect(() => {
     if (isDesktop || !fs || !landscapeVideo) return;
-    try { void invoke("set_orientation", { landscape: true }); } catch { /* ignore */ }
+    try { invoke("set_orientation", { landscape: true }).catch(() => {}); } catch { /* ignore */ }
     try {
       (screen.orientation as unknown as { lock?: (o: string) => Promise<void> })?.lock?.("landscape")?.catch(() => {});
     } catch { /* ignore */ }
@@ -956,13 +971,15 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     if (isDesktop) return undefined;
     const onViewportChange = () => {
       const isLand = window.innerWidth > window.innerHeight;
-      setVpLandscape((prev) => {
-        if (prev !== isLand && active) {
-          setFs(isLand);
-          keepAlive();
-        }
-        return isLand;
-      });
+      // 副作用不能放进 setState 的 updater（渲染期间更新 AppProvider 会触发 React 警告）
+      if (vpLandRef.current !== isLand && active) {
+        setFs(isLand);
+        keepAlive();
+        // 转横进入全屏：先显示控制 UI，再按全屏规则自动隐藏
+        if (isLand) wake();
+      }
+      vpLandRef.current = isLand;
+      setVpLandscape(isLand);
     };
     window.addEventListener("resize", onViewportChange);
     window.addEventListener("orientationchange", onViewportChange);
@@ -970,7 +987,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       window.removeEventListener("resize", onViewportChange);
       window.removeEventListener("orientationchange", onViewportChange);
     };
-  }, [isDesktop, active, setFs, keepAlive]);
+  }, [isDesktop, active, setFs, keepAlive, wake]);
 
   /* 全屏切换或视口旋转后校准滚动容器 scrollTop：
      - 进入全屏时非当前项已隐藏，当前项位于顶部 scrollTop = 0；
@@ -1174,7 +1191,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       aria-hidden={!active || undefined}
       onFocusCapture={() => { if (active && isDesktop) wake(); }}
       onPointerMove={() => { if (isDesktop || fs) wake(); }}
-      onPointerDown={() => { if (!isDesktop && fs) wake(); }}>
+      onPointerDown={(e) => {
+        // 画面本身的单击由手势层切换显隐；这里只在操作控件时续期，
+        // 否则按下先唤醒、抬起又被单击切回隐藏，UI 会一闪即逝。
+        if (!isDesktop && fs && !holdTargetRef.current?.contains(e.target as Node)) wake();
+      }}>
       <div className="absolute inset-0" inert={controlsLocked}>
       {/* 氛围背景 */}
       {!isDesktop && posterUrl && (
@@ -1483,6 +1504,19 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                   进度条轨道几乎不可见，只用白点标播放位置。 */}
               {!fs && !clean && !isDesktop && (
                 <div className="absolute inset-x-0 z-20" style={{ bottom: `calc(var(--sab, 0px) + ${bottomInset}px)` }}>
+                  {isActive && !vpLandscape && duration > 0 && (
+                    /* 竖屏：标题上方、贴左侧的快进 / 快退 10 秒 */
+                    <div className="mobile-skip-buttons pl-4 pb-3 flex flex-col items-start gap-2.5">
+                      <Button data-testid="skip-forward" aria-label="快进 10 秒" onClick={() => skipBy(10)}
+                        className="hg-chip w-11 h-11 rounded-full flex items-center justify-center pressable elev-1">
+                        <IFwd10 size={24} />
+                      </Button>
+                      <Button data-testid="skip-back" aria-label="后退 10 秒" onClick={() => skipBy(-10)}
+                        className="hg-chip w-11 h-11 rounded-full flex items-center justify-center pressable elev-1">
+                        <IBack10 size={24} />
+                      </Button>
+                    </div>
+                  )}
                   <div className="mobile-video-meta-copy relative pb-2 flex items-center gap-2">
                     <p className="flex-1 min-w-0 text-[15px] font-semibold leading-snug hg-ink-2 hg-ov-shadow-strong clamp-2">{meta.title}</p>
                   </div>
@@ -1532,12 +1566,25 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               )}
 
               {/* 暂停 / 缓冲 */}
-              {isActive && paused && !err && (
+              {isActive && !err && !scrub && (paused || (centerToggle && !waiting)) && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
-                  <span className="w-[66px] h-[66px] rounded-full flex items-center justify-center backdrop-blur-md"
-                    style={{ background: "rgba(0,0,0,.55)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,.12)" }}>
-                    <IPlayF size={28} className="hg-ink ml-0.5" />
-                  </span>
+                  {centerToggle ? (
+                    /* 竖屏移动端：控制 UI 显示时，正中央可点的播放 / 暂停键 */
+                    <Button data-testid="center-play-toggle" aria-label={paused ? "播放" : "暂停"}
+                      onClick={() => {
+                        videoRef.current?.toggle();
+                        if (fs) wake();
+                      }}
+                      className="pointer-events-auto w-[66px] h-[66px] rounded-full flex items-center justify-center backdrop-blur-md pressable"
+                      style={{ background: "rgba(0,0,0,.45)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,.12)" }}>
+                      {paused ? <IPlayF size={28} className="hg-ink ml-0.5" /> : <IPauseF size={26} className="hg-ink" />}
+                    </Button>
+                  ) : (
+                    <span className="w-[66px] h-[66px] rounded-full flex items-center justify-center backdrop-blur-md"
+                      style={{ background: "rgba(0,0,0,.55)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,.12)" }}>
+                      <IPlayF size={28} className="hg-ink ml-0.5" />
+                    </span>
+                  )}
                 </div>
               )}
               {isActive && waiting && !err && !paused && (
@@ -1646,10 +1693,24 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               paddingLeft: rotated ? "calc(var(--sat, 0px) + 16px)" : undefined,
               paddingRight: rotated ? "calc(var(--sab, 0px) + 16px)" : undefined,
             }}>
-            <Button onClick={() => videoRef.current?.toggle()}
-              className="hg-chip shrink-0 w-9 h-9 rounded-full flex items-center justify-center pressable">
-              {paused ? <IPlayF size={18} /> : <IPauseF size={17} />}
-            </Button>
+            {rotated || vpLandscape ? (
+              /* 横屏：播放 / 暂停交给画面中心键，左下角改为后退 / 快进 10 秒（快进键宽一倍） */
+              <>
+                <Button data-testid="fs-skip-back" aria-label="后退 10 秒" onClick={() => { skipBy(-10); wake(); }}
+                  className="hg-chip shrink-0 w-11 h-9 rounded-full flex items-center justify-center pressable">
+                  <IBack10 size={22} />
+                </Button>
+                <Button data-testid="fs-skip-forward" aria-label="快进 10 秒" onClick={() => { skipBy(10); wake(); }}
+                  className="hg-chip shrink-0 w-[88px] h-9 ml-[10px] rounded-full flex items-center justify-center pressable">
+                  <IFwd10 size={22} />
+                </Button>
+              </>
+            ) : (
+              <Button onClick={() => videoRef.current?.toggle()}
+                className="hg-chip shrink-0 w-9 h-9 rounded-full flex items-center justify-center pressable">
+                {paused ? <IPlayF size={18} /> : <IPauseF size={17} />}
+              </Button>
+            )}
             <PlaybackTime clock={playbackClock} className="shrink-0 text-[12px] font-semibold hg-ink-2 tabular-nums" />
             <Button
               onClick={() => {
