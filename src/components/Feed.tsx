@@ -1623,10 +1623,24 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               paddingLeft: rotated ? "calc(var(--sat, 0px) + 16px)" : undefined,
               paddingRight: rotated ? "calc(var(--sab, 0px) + 16px)" : undefined,
             }}>
-            <Button onClick={() => videoRef.current?.toggle()}
-              className="hg-chip shrink-0 w-9 h-9 rounded-full flex items-center justify-center pressable">
-              {paused ? <IPlayF size={18} /> : <IPauseF size={17} />}
-            </Button>
+            {rotated || vpLandscape ? (
+              /* 横屏：播放 / 暂停交给画面中心键，左下角改为后退 / 快进 10 秒（快进键宽一倍） */
+              <>
+                <Button data-testid="fs-skip-back" aria-label="后退 10 秒" onClick={() => { skipBy(-10); wake(); }}
+                  className="hg-chip shrink-0 w-11 h-9 rounded-full flex items-center justify-center pressable">
+                  <IBack10 size={22} />
+                </Button>
+                <Button data-testid="fs-skip-forward" aria-label="快进 10 秒" onClick={() => { skipBy(10); wake(); }}
+                  className="hg-chip shrink-0 w-[88px] h-9 ml-[10px] rounded-full flex items-center justify-center pressable">
+                  <IFwd10 size={22} />
+                </Button>
+              </>
+            ) : (
+              <Button onClick={() => videoRef.current?.toggle()}
+                className="hg-chip shrink-0 w-9 h-9 rounded-full flex items-center justify-center pressable">
+                {paused ? <IPlayF size={18} /> : <IPauseF size={17} />}
+              </Button>
+            )}
             <PlaybackTime clock={playbackClock} className="shrink-0 text-[12px] font-semibold hg-ink-2 tabular-nums" />
             <Button
               onClick={() => {

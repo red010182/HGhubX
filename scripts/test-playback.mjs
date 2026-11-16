@@ -216,6 +216,19 @@ async function gestureChecks(page) {
   await exitFs.waitFor();
   await page.waitForTimeout(600);
   assert(await exitFs.isVisible(), 'Landscape tap keeps the chrome visible');
+
+  // 横屏左下角：后退在左、快进在右且宽一倍，不再有播放 / 暂停键。
+  const fsBack = page.getByTestId('fs-skip-back'), fsFwd = page.getByTestId('fs-skip-forward');
+  const [bBox, fBox] = await Promise.all([fsBack.boundingBox(), fsFwd.boundingBox()]);
+  assert(Math.abs(fBox.x - (bBox.x + bBox.width) - 22) < 1, `Forward keeps 22px from back: ${fBox.x - (bBox.x + bBox.width)}`);
+  assert(Math.abs(fBox.width - 2 * bBox.width) < 1, `Forward is twice as wide: ${bBox.width} / ${fBox.width}`);
+  assert.equal(await page.locator('[data-testid="fs-skip-back"] ~ button svg rect').count(), 0, 'No play/pause button in the landscape bar');
+  let t0 = await video.evaluate(v => v.currentTime);
+  await fsFwd.click();
+  await page.waitForFunction(t => document.querySelector('video').currentTime >= t + 9, t0);
+  t0 = await video.evaluate(v => v.currentTime);
+  await fsBack.click();
+  await page.waitForFunction(t => document.querySelector('video').currentTime <= t - 9, t0);
   assert.equal(await centerToggle.getAttribute('aria-label'), '暂停');
   await centerToggle.click();
   await page.locator('[data-testid="center-play-toggle"][aria-label="播放"]').waitFor();
