@@ -174,7 +174,8 @@ async function gestureChecks(page) {
 
   // 竖屏：控制 UI 显示时，画面正中有可点的播放 / 暂停键；净屏后隐藏。
   const centerToggle = page.getByTestId('center-play-toggle');
-  await page.setViewportSize({ width: 390, height: 844 });
+  // 夹具播放器固定 900×540，用高大于宽的视口模拟竖屏，同时让整个画面都在视口内。
+  await page.setViewportSize({ width: 900, height: 1000 });
   if (await video.evaluate(v => v.paused)) await video.evaluate(v => v.play());
   await page.waitForFunction(() => document.querySelector('video')?.paused === false);
   await centerToggle.waitFor();
@@ -194,6 +195,16 @@ async function gestureChecks(page) {
   const [fwdBox, backBox, title] = await Promise.all([fwd.boundingBox(), back.boundingBox(), page.getByText('Seek fixture').boundingBox()]);
   assert(fwdBox.y < backBox.y && backBox.y + backBox.height <= title.y, 'Forward above back, both above the title');
   assert(Math.abs(fwdBox.x - title.x) < 2 && Math.abs(backBox.x - title.x) < 2, 'Skip buttons share the title\'s left padding');
+  // 快进 / 后退的容器不能盖住右侧操作栏（分享、下载曾因此点不动）。
+  const railCount = await page.locator('.mobile-video-action-rail button').count();
+  assert(railCount >= 3, 'Action rail rendered');
+  const blocked = await page.evaluate(() => [...document.querySelectorAll('.mobile-video-action-rail button')].filter(b => {
+    const r = b.getBoundingClientRect();
+    if (!r.width) return false;
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return !hit || !b.contains(hit);
+  }).map(b => b.getAttribute('aria-label') || b.textContent));
+  assert.deepEqual(blocked, [], 'Action rail buttons stay clickable');
   const now = () => video.evaluate(v => v.currentTime);
   let before = await now();
   await fwd.click();

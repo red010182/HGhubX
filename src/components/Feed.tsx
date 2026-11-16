@@ -1505,8 +1505,9 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               {!fs && !clean && !isDesktop && (
                 <div className="absolute inset-x-0 z-20" style={{ bottom: `calc(var(--sab, 0px) + ${bottomInset}px)` }}>
                   {isActive && !vpLandscape && duration > 0 && (
-                    /* 竖屏：标题上方、贴左侧的快进 / 快退 10 秒 */
-                    <div className="mobile-skip-buttons pl-4 pb-3 flex flex-col items-start gap-2.5">
+                    /* 竖屏：标题上方、贴左侧的快进 / 快退 10 秒。绝对定位、只占按钮大小，
+                       不撑高标题区——否则整条横向区域会盖住右侧操作栏的下载 / 分享 */
+                    <div className="mobile-skip-buttons absolute left-4 bottom-full pb-3 flex flex-col gap-2.5">
                       <Button data-testid="skip-forward" aria-label="快进 10 秒" onClick={() => skipBy(10)}
                         className="hg-chip w-11 h-11 rounded-full flex items-center justify-center pressable elev-1">
                         <IFwd10 size={24} />
