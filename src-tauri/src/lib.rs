@@ -1,4 +1,5 @@
 mod api;
+mod downloads;
 #[cfg(any(target_os = "macos", target_os = "ios", test))]
 mod apple_proxy;
 mod env;
@@ -92,6 +93,16 @@ pub fn run() {
                 // 上次选择的线路（设置 → 线路）在启动时恢复
                 net::bind_base(&dir);
                 playback_log::bind(&dir);
+                downloads::bind(&dir);
+                // 下载队列取播放地址走与播放相同的 api_play 逻辑（含新旧接口回退）
+                let handle = app.handle().clone();
+                downloads::set_resolver(std::sync::Arc::new(move |id, ep| {
+                    let handle = handle.clone();
+                    Box::pin(async move {
+                        let state = handle.state::<Api>();
+                        api::play_info(state.inner(), id, ep).await
+                    })
+                }));
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
             }
@@ -251,6 +262,11 @@ pub fn run() {
             api::api_user_videos,
             api::api_video,
             api::api_play,
+            api::download_start,
+            api::download_season,
+            api::download_list,
+            api::download_pause,
+            api::download_delete,
             api::api_comments,
             api::api_comment_send,
             api::api_like,

@@ -8,7 +8,7 @@ import { Avatar, Empty, Modal } from "../components/ui";
 import { MediaCard } from "../components/cards";
 import { useContentPreferences } from "../contentPreferences";
 import { CollectionLink, CollectionLinks } from "../components/CollectionLink";
-import { IChevR, IClock, IHeart, ILogout, ISettings, IStar, IUser, IUserF } from "../icons";
+import { IChevR, IClock, IDownload, IHeart, ILogout, ISettings, IStar, IUser, IUserF } from "../icons";
 
 /* Account changes discard cached details synchronously, before another account can paint. */
 export default function Profile({ wide }: { wide: boolean }) {
@@ -161,6 +161,12 @@ function ProfileContent({ wide }: { wide: boolean }) {
               onClick={() => push({ kind: "user", id: user.id, name: user.nickname })} />
           </CollectionLinks>
         )}
+
+        {/* 离线下载：不需要登录，断网也能进 */}
+        <CollectionLinks className={user ? "mt-2.5" : "ios-profile-links mt-4"}>
+          <CollectionLink icon={<IDownload size={18} />} title="离线下载" subtitle="下载后无网也能看"
+            onClick={() => push({ kind: "downloads" })} />
+        </CollectionLinks>
 
         {/* 我的内容 */}
         <SegmentedControl className="mt-4" aria-label="我的内容" activeIndex={tab === "fav" ? 0 : 1}>

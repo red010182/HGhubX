@@ -28,6 +28,8 @@ const TopicPage = lazy(() => import("./pages/Discover").then(module => ({ defaul
 const TagsPage = lazy(() => import("./pages/Discover").then(module => ({ default: module.TagsPage })));
 const TagPage = lazy(() => import("./pages/Discover").then(module => ({ default: module.TagPage })));
 const FollowingPage = lazy(() => import("./pages/User").then(module => ({ default: module.FollowingPage })));
+const DownloadsPage = lazy(() => import("./pages/Downloads"));
+const OfflinePlayerPage = lazy(() => import("./pages/Downloads").then(module => ({ default: module.OfflinePlayer })));
 const UserPage = lazy(() => import("./pages/User").then(module => ({ default: module.UserPage })));
 
 function PageLoading() {
@@ -89,6 +91,8 @@ function StackPageContent({ page, onBack, wide, top, bottomInset }: {
   if (page.kind === "tag") return <TagPage tag={page.tag} name={page.name} onBack={onBack} wide={wide} />;
   if (page.kind === "following") return <FollowingPage onBack={onBack} wide={wide} />;
   if (page.kind === "user") return <UserPage id={page.id} name={page.name} onBack={onBack} wide={wide} />;
+  if (page.kind === "downloads") return <DownloadsPage onBack={onBack} />;
+  if (page.kind === "offline") return <OfflinePlayerPage itemKey={page.item} onBack={onBack} active={top} />;
   return null;
 }
 

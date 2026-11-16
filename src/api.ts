@@ -207,10 +207,42 @@ export const api = {
   proxySet: (mode: ProxyMode, url: string) => call<ProxyState>("proxy_set", { mode, url }),
   proxyTest: (mode: ProxyMode, url: string) => call<ProxyProbe>("proxy_test", { mode, url }),
 
+  /* 离线下载：只下 HLS 短剧剧集，文件落在应用数据目录 */
+  downloadStart: (id: number, ep: number, title?: string, cover?: string) =>
+    invoke<DownloadItem>("download_start", { id, ep, title: title ?? null, cover: cover ?? null }),
+  /** 整季下载：多集一次入队（同时最多下 2 集），返回新入队的集数 */
+  downloadSeason: (id: number, eps: number[], title?: string, cover?: string) =>
+    invoke<number>("download_season", { id, eps, title: title ?? null, cover: cover ?? null }),
+  downloadList: () => invoke<DownloadItem[]>("download_list"),
+  downloadPause: (key: string) => invoke<void>("download_pause", { key }),
+  downloadDelete: (key: string) => invoke<void>("download_delete", { key }),
+
   /* 更新检查：对比 GitHub Release 的 tag */
   checkUpdate: () => call<UpdateInfo>("check_update"),
   openUrl: (url: string) => call<void>("open_url", { url }),
 };
+
+/* ── 离线下载 ───────────────────────────────────────────── */
+
+export type DownloadStatus = "queued" | "downloading" | "paused" | "failed" | "done";
+export type DownloadItem = {
+  key: string;
+  video_id: number;
+  ep: number;
+  title: string;
+  has_cover: boolean;
+  status: DownloadStatus;
+  done: number;
+  total: number;
+  bytes: number;
+  error?: string | null;
+  created_at: number;
+};
+/** 已下载剧集的本地播放列表（相对路径分片，Rust 侧 `/dl/` 路由读本地文件） */
+export const offlineSrc = (key: string) => `${LOCAL}/dl/${key}/index.m3u8`;
+export const offlineCover = (key: string) => `${LOCAL}/dl/${key}/cover`;
+export const fmtBytes = (n: number) =>
+  n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(2)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(0, Math.round(n / 1024))} KB`;
 
 /* ── 更新检查 ───────────────────────────────────────────── */
 
