@@ -185,10 +185,23 @@ async function gestureChecks(page) {
   assert(Math.abs(box.x + box.width / 2 - (root.x + root.width / 2)) < 2, 'Center toggle is horizontally centered');
   await centerToggle.click();
   await page.waitForFunction(() => document.querySelector('video')?.paused === true);
-  assert.equal(await centerToggle.getAttribute('aria-label'), '播放');
+  await page.locator('[data-testid="center-play-toggle"][aria-label="播放"]').waitFor();
   assert.equal(await clean(), 'false', 'Center toggle must not trigger the clean-screen tap');
   await centerToggle.click();
   await page.waitForFunction(() => document.querySelector('video')?.paused === false);
+
+  // 竖屏：标题上方贴左的快进在上、后退在下，各跳 10 秒。
+  const fwd = page.getByTestId('skip-forward'), back = page.getByTestId('skip-back');
+  const [fwdBox, backBox, title] = await Promise.all([fwd.boundingBox(), back.boundingBox(), page.getByText('Seek fixture').boundingBox()]);
+  assert(fwdBox.y < backBox.y && backBox.y + backBox.height <= title.y, 'Forward above back, both above the title');
+  assert(Math.abs(fwdBox.x - title.x) < 2 && Math.abs(backBox.x - title.x) < 2, 'Skip buttons share the title\'s left padding');
+  const now = () => video.evaluate(v => v.currentTime);
+  let before = await now();
+  await fwd.click();
+  await page.waitForFunction(t => document.querySelector('video').currentTime >= t + 9, before);
+  before = await now();
+  await back.click();
+  await page.waitForFunction(t => document.querySelector('video').currentTime <= t - 9, before);
   await page.waitForTimeout(250);
   await tap();
   await page.waitForFunction(() => document.querySelector('.player-root')?.dataset.clean === 'true');
