@@ -342,6 +342,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const effRate = holdSpeed || speedLock ? 2 : holdSlow ? 0.5 : rate;
   /* 沉浸全屏 + 横屏视频 → 舞台旋转 90°，看起来就是横屏 */
   const rotated = !isDesktop && fs && vsize.w > vsize.h && vsize.h > 0 && !vpLandscape;
+  /* 竖屏移动端：控制 UI 可见（普通模式非净屏 / 全屏非闲置）时，画面正中显示可点的播放 / 暂停键 */
+  const centerToggle = !isDesktop && !rotated && !vpLandscape && !controlsLocked && (fs ? !idle : !clean);
   const landscapeVideo = vsize.w > 0 && vsize.h > 0 && vsize.w > vsize.h;
   /* 竖屏快捷胶囊的显隐：不卸载、只改 opacity，这样淡入淡出都能过渡（#19） */
   const capsuleOn = !fs && !clean && !isDesktop && (landscapeVideo || zoom.s > 1.05);
@@ -1462,12 +1464,25 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
               )}
 
               {/* 暂停 / 缓冲 */}
-              {isActive && paused && !err && (
+              {isActive && !err && !scrub && (paused || (centerToggle && !waiting)) && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
-                  <span className="w-[66px] h-[66px] rounded-full flex items-center justify-center backdrop-blur-md"
-                    style={{ background: "rgba(0,0,0,.55)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,.12)" }}>
-                    <IPlayF size={28} className="hg-ink ml-0.5" />
-                  </span>
+                  {centerToggle ? (
+                    /* 竖屏移动端：控制 UI 显示时，正中央可点的播放 / 暂停键 */
+                    <Button data-testid="center-play-toggle" aria-label={paused ? "播放" : "暂停"}
+                      onClick={() => {
+                        videoRef.current?.toggle();
+                        if (fs) wake();
+                      }}
+                      className="pointer-events-auto w-[66px] h-[66px] rounded-full flex items-center justify-center backdrop-blur-md pressable"
+                      style={{ background: "rgba(0,0,0,.45)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,.12)" }}>
+                      {paused ? <IPlayF size={28} className="hg-ink ml-0.5" /> : <IPauseF size={26} className="hg-ink" />}
+                    </Button>
+                  ) : (
+                    <span className="w-[66px] h-[66px] rounded-full flex items-center justify-center backdrop-blur-md"
+                      style={{ background: "rgba(0,0,0,.55)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,.12)" }}>
+                      <IPlayF size={28} className="hg-ink ml-0.5" />
+                    </span>
+                  )}
                 </div>
               )}
               {isActive && waiting && !err && !paused && (

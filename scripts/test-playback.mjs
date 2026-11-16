@@ -146,6 +146,8 @@ async function speedMenuKeyboardChecks(page, paused) {
   await assertSelection(1);
 }
 async function gestureChecks(page) {
+  // 首次长按引导会盖住画面并暂停播放，手势用例不测它。
+  await page.addInitScript(() => localStorage.setItem("hghubx_mobile_hold_guide_v1", "1"));
   await loadPlayer(page);
   const video = page.locator('video');
   const tap = () => page.evaluate(() => {
@@ -169,6 +171,28 @@ async function gestureChecks(page) {
   await tap(); await tap();
   await page.waitForFunction(paused => document.querySelector('video').paused !== paused, wasPaused);
   assert.equal(await clean(), 'false', 'Double tap restores chrome and toggles playback once');
+
+  // 竖屏：控制 UI 显示时，画面正中有可点的播放 / 暂停键；净屏后隐藏。
+  const centerToggle = page.getByTestId('center-play-toggle');
+  assert.equal(await centerToggle.count(), 0, 'Landscape viewport keeps the passive pause overlay');
+  await page.setViewportSize({ width: 390, height: 844 });
+  if (await video.evaluate(v => v.paused)) await video.evaluate(v => v.play());
+  await page.waitForFunction(() => document.querySelector('video')?.paused === false);
+  await centerToggle.waitFor();
+  assert.equal(await centerToggle.getAttribute('aria-label'), '暂停');
+  const box = await centerToggle.boundingBox();
+  const root = await page.locator('.player-root').boundingBox();
+  assert(Math.abs(box.x + box.width / 2 - (root.x + root.width / 2)) < 2, 'Center toggle is horizontally centered');
+  await centerToggle.click();
+  await page.waitForFunction(() => document.querySelector('video')?.paused === true);
+  assert.equal(await centerToggle.getAttribute('aria-label'), '播放');
+  assert.equal(await clean(), 'false', 'Center toggle must not trigger the clean-screen tap');
+  await centerToggle.click();
+  await page.waitForFunction(() => document.querySelector('video')?.paused === false);
+  await page.waitForTimeout(250);
+  await tap();
+  await page.waitForFunction(() => document.querySelector('.player-root')?.dataset.clean === 'true');
+  await centerToggle.waitFor({ state: 'detached' });
   return {singleTapMs};
 }
 
