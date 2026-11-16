@@ -171,6 +171,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   useEffect(() => {
     if (paused) { setIdle(false); window.clearTimeout(idleTimer.current); }
   }, [paused]);
+  /* 移动端全屏：显示控制 UI 时重新计时自动隐藏，隐藏时取消计时 */
+  const setFsChrome = useCallback((show: boolean) => {
+    if (show) wake();
+    else { window.clearTimeout(idleTimer.current); setIdle(true); }
+  }, [wake]);
   const [fullscreen, setFullscreen] = useState(false);
   const [heartBurst, setHeartBurst] = useState(0);
   /* —— 移动端手势 —— */
@@ -197,6 +202,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const [vpLandscape, setVpLandscape] = useState(
     () => typeof window !== "undefined" && window.innerWidth > window.innerHeight,
   );
+  const vpLandRef = useRef(vpLandscape);
   /* 进出全屏过渡期多次续播，防止 iOS 把播放打断 */
   const keepAliveTimers = useRef<number[]>([]);
   /* 双指缩放：scale 1~4，平移跟手指 */
@@ -342,8 +348,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const effRate = holdSpeed || speedLock ? 2 : holdSlow ? 0.5 : rate;
   /* 沉浸全屏 + 横屏视频 → 舞台旋转 90°，看起来就是横屏 */
   const rotated = !isDesktop && fs && vsize.w > vsize.h && vsize.h > 0 && !vpLandscape;
-  /* 竖屏移动端：控制 UI 可见（普通模式非净屏 / 全屏非闲置）时，画面正中显示可点的播放 / 暂停键 */
-  const centerToggle = !isDesktop && !rotated && !vpLandscape && !controlsLocked && (fs ? !idle : !clean);
+  /* 移动端（竖屏 / 横屏）：控制 UI 可见（普通模式非净屏 / 全屏非闲置）时，画面正中显示可点的播放 / 暂停键 */
+  const centerToggle = !isDesktop && !controlsLocked && (fs ? !idle : !clean);
   /* 相对跳转（竖屏快进 / 快退按钮），夹在 [0, 时长) 内 */
   const skipBy = (delta: number) => {
     const v = videoRef.current?.el();
@@ -828,13 +834,13 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         window.clearTimeout(lastTapRef.current.timer);
         lastTapRef.current.timer = null;
         setClean(lastTapRef.current.clean ?? false);
-        if (!isDesktop && fs) setIdle(lastTapRef.current.idle ?? false);
+        if (!isDesktop && fs) setFsChrome(!(lastTapRef.current.idle ?? false));
         videoRef.current?.toggle();
       } else {
         lastTapRef.current.clean = clean;
         lastTapRef.current.idle = idle;
         setClean(!clean);
-        if (!isDesktop && fs) setIdle(!idle);
+        if (!isDesktop && fs) setFsChrome(idle);
         lastTapRef.current.timer = window.setTimeout(() => {
           lastTapRef.current.timer = null;
         }, 230) as unknown as number;
@@ -892,7 +898,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     wake();
     keepAlive();
     if (!isDesktop) {
-      try { void invoke("set_orientation", { landscape }); } catch { /* ignore */ }
+      try { invoke("set_orientation", { landscape }).catch(() => {}); } catch { /* ignore */ }
       if (landscape) {
         try {
           (screen.orientation as unknown as { lock?: (o: string) => Promise<void> })?.lock?.("landscape")?.catch(() => {});
@@ -906,7 +912,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     setFs(false);
     keepAlive();
     if (!isDesktop) {
-      try { void invoke("set_orientation", { landscape: false }); } catch { /* ignore */ }
+      try { invoke("set_orientation", { landscape: false }).catch(() => {}); } catch { /* ignore */ }
       try { screen.orientation?.unlock?.(); } catch { /* ignore */ }
     }
   }, [isDesktop, keepAlive, setClean, setFs]);
@@ -914,7 +920,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   /* 若用户在视频首帧宽高解析出来前已点进全屏，解析出横屏后自动补发横屏方向请求 */
   useEffect(() => {
     if (isDesktop || !fs || !landscapeVideo) return;
-    try { void invoke("set_orientation", { landscape: true }); } catch { /* ignore */ }
+    try { invoke("set_orientation", { landscape: true }).catch(() => {}); } catch { /* ignore */ }
     try {
       (screen.orientation as unknown as { lock?: (o: string) => Promise<void> })?.lock?.("landscape")?.catch(() => {});
     } catch { /* ignore */ }
@@ -926,13 +932,15 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     if (isDesktop) return undefined;
     const onViewportChange = () => {
       const isLand = window.innerWidth > window.innerHeight;
-      setVpLandscape((prev) => {
-        if (prev !== isLand && active) {
-          setFs(isLand);
-          keepAlive();
-        }
-        return isLand;
-      });
+      // 副作用不能放进 setState 的 updater（渲染期间更新 AppProvider 会触发 React 警告）
+      if (vpLandRef.current !== isLand && active) {
+        setFs(isLand);
+        keepAlive();
+        // 转横进入全屏：先显示控制 UI，再按全屏规则自动隐藏
+        if (isLand) wake();
+      }
+      vpLandRef.current = isLand;
+      setVpLandscape(isLand);
     };
     window.addEventListener("resize", onViewportChange);
     window.addEventListener("orientationchange", onViewportChange);
@@ -940,7 +948,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       window.removeEventListener("resize", onViewportChange);
       window.removeEventListener("orientationchange", onViewportChange);
     };
-  }, [isDesktop, active, setFs, keepAlive]);
+  }, [isDesktop, active, setFs, keepAlive, wake]);
 
   /* 全屏切换或视口旋转后校准滚动容器 scrollTop：
      - 进入全屏时非当前项已隐藏，当前项位于顶部 scrollTop = 0；
@@ -1144,7 +1152,11 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       aria-hidden={!active || undefined}
       onFocusCapture={() => { if (active && isDesktop) wake(); }}
       onPointerMove={() => { if (isDesktop || fs) wake(); }}
-      onPointerDown={() => { if (!isDesktop && fs) wake(); }}>
+      onPointerDown={(e) => {
+        // 画面本身的单击由手势层切换显隐；这里只在操作控件时续期，
+        // 否则按下先唤醒、抬起又被单击切回隐藏，UI 会一闪即逝。
+        if (!isDesktop && fs && !holdTargetRef.current?.contains(e.target as Node)) wake();
+      }}>
       <div className="absolute inset-0" inert={controlsLocked}>
       {/* 氛围背景 */}
       {!isDesktop && posterUrl && (

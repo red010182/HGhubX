@@ -174,7 +174,6 @@ async function gestureChecks(page) {
 
   // 竖屏：控制 UI 显示时，画面正中有可点的播放 / 暂停键；净屏后隐藏。
   const centerToggle = page.getByTestId('center-play-toggle');
-  assert.equal(await centerToggle.count(), 0, 'Landscape viewport keeps the passive pause overlay');
   await page.setViewportSize({ width: 390, height: 844 });
   if (await video.evaluate(v => v.paused)) await video.evaluate(v => v.play());
   await page.waitForFunction(() => document.querySelector('video')?.paused === false);
@@ -206,6 +205,31 @@ async function gestureChecks(page) {
   await tap();
   await page.waitForFunction(() => document.querySelector('.player-root')?.dataset.clean === 'true');
   await centerToggle.waitFor({ state: 'detached' });
+
+  // 横屏（转横自动进入全屏）：单击唤出的 UI 要保持住，不能一闪即逝；中心键同样可用。
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.waitForFunction(() => document.querySelector('.player-root')?.matches('.fs-immersive, .fs-landscape'));
+  const exitFs = page.getByRole('button', { name: '退出全屏', exact: true });
+  await exitFs.waitFor({ state: 'detached', timeout: 6000 });
+  await page.waitForTimeout(250);
+  await tap();
+  await exitFs.waitFor();
+  await page.waitForTimeout(600);
+  assert(await exitFs.isVisible(), 'Landscape tap keeps the chrome visible');
+  assert.equal(await centerToggle.getAttribute('aria-label'), '暂停');
+  await centerToggle.click();
+  await page.locator('[data-testid="center-play-toggle"][aria-label="播放"]').waitFor();
+  assert.equal(await video.evaluate(v => v.paused), true);
+  await centerToggle.click();
+  await page.waitForFunction(() => document.querySelector('video')?.paused === false);
+  await page.waitForTimeout(250);
+  await tap();
+  await exitFs.waitFor({ state: 'detached' });
+  await centerToggle.waitFor({ state: 'detached' });
+  await page.waitForTimeout(250);
+  await tap();
+  await exitFs.waitFor();
+  await exitFs.waitFor({ state: 'detached', timeout: 6000 });
   return {singleTapMs};
 }
 
